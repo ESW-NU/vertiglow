@@ -1,0 +1,2 @@
+# Candidate Models
+These are potential edge detection models that Andre wrote. They're written in python for ease of rapid prototyping, but if we choose to implement any of them on the esp32 we'll have to translate them into C++. This shouldn't be too hard since opencv is a C++ library.
