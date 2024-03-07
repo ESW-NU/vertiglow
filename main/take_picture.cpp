@@ -29,6 +29,7 @@
  */
 
 // ================================ CODE ======================================
+#define ESP32 1
 #undef EPS
 #include "opencv2/core.hpp"
 #include "opencv2/imgproc.hpp"
@@ -138,6 +139,85 @@ static esp_err_t init_camera(void)
     return ESP_OK;
 }
 
+Mat detect_edges(Mat img) {
+    Mat edges;
+
+    // Canny(img, edges, 100, 200);
+    return img;
+}
+
+Mat dilate_img(Mat img) {
+    Mat dilated;
+    dilate(img, dilated, getStructuringElement(MORPH_RECT, Size(11, 11)), Point(-1, -1), 1);
+    return dilated;
+}
+
+Mat calc_var_over_rows(Mat img) {
+    Mat sum;
+    reduce(img, sum, 1, REDUCE_SUM, CV_32S);
+    return sum;
+}
+
+Mat gaussian_filter(int kernel_size, double sigma) {
+    Mat kernel(kernel_size, 1, CV_64F);
+    double sum = 0.0;
+    for (int x = 0; x < kernel_size; x++) {
+        kernel.at<double>(x, 0) = (1 / (std::sqrt(2 * M_PI) * sigma)) * std::exp(-((x - (kernel_size - 1) / 2) * (x - (kernel_size - 1) / 2)) / (2 * sigma * sigma));
+        sum += kernel.at<double>(x, 0);
+    }
+    kernel /= sum;
+    return kernel;
+}
+
+Mat smooth_data(Mat data, Mat kernel) {
+    Mat smoothed_data;
+    filter2D(data, smoothed_data, -1, kernel);
+    return smoothed_data;
+}
+
+int calc_splitter(Mat data, int threshold = 10000) {
+    for (int i = 0; i < data.rows; i++) {
+        if (data.at<int>(i, 0) > threshold) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int run_canny(Mat raw_img) {
+    cv::Mat edge_img = detect_edges(raw_img);
+    cv::Mat dilated = dilate_img(edge_img);
+    cv::Mat variation_over_rows = calc_var_over_rows(dilated);
+    cv::Mat kernel = gaussian_filter(30, 10);
+    cv::Mat smoothed_data = smooth_data(variation_over_rows, kernel);
+    int splitter = calc_splitter(smoothed_data, 20000);
+	return splitter;
+}
+
+// a bad algorithm courtesy of chat GPT
+Point run_threshold(Mat raw_img) {
+	// Apply thresholding
+	threshold(raw_img, raw_img, 128, 255, THRESH_BINARY);
+
+	// Find contours in the thresholded image
+	vector<vector<Point>> contours;
+	findContours(raw_img, contours, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+
+	// Find the contour with the highest top point
+	Point highestPoint(0, 0);
+	double highestY = DBL_MAX; // Initialize with a large value
+
+	for (const auto& contour : contours) {
+		for (const auto& point : contour) {
+			if (point.y < highestY) {
+				highestY = point.y;
+				highestPoint = point;
+			}
+		}
+	}
+	return highestPoint;
+}
+
 // this is necessary for defining the main function in C++ rather than C
 //  https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/cplusplus.html#developing-in-c
 extern "C" {
@@ -148,7 +228,7 @@ void app_main(void)
 {
 	// https://docs.espressif.com/projects/esp-idf/en/v4.3/esp32/api-reference/system/log.html#_CPPv417esp_log_level_setPKc15esp_log_level_t
 	// set (max) log level for tags
-	// we're using log-level verbose for data and log level info for normal log statements
+	// we're using log-level verbose for data and log level info for normal
 	// then it should be pretty easy to filter between the two when running the monitor
 	esp_log_level_set(DATA_TAG, ESP_LOG_VERBOSE);
 	esp_log_level_set(APP_TAG, ESP_LOG_INFO);
@@ -171,10 +251,8 @@ void app_main(void)
 
 		// https://github.com/espressif/esp-idf/blob/v5.2.1/components/log/include/esp_log_internal.h
 		// write the image data to serial monitor
-		// buf len is uint16_t, so its max value is 2^16-1=65535. 
-		// we will use this as a chunk size to iteratively log the buffer
+		// buf len is uint16_t, so in theory, its max value is 65535. we will use this as a chunk size to iteratively write the buffer
 		uint16_t max_buf_len = 65535;
-		ESP_LOGI(APP_TAG, "max: %zu ", max_buf_len);
 		size_t offset = 0; // offset = 0
 		while ((pic->len - offset) > max_buf_len) {
 			ESP_LOG_BUFFER_HEX_LEVEL(DATA_TAG, pic->buf + offset, max_buf_len, ESP_LOG_VERBOSE);
@@ -193,13 +271,26 @@ void app_main(void)
 				uchar matrixValue = raw_img.at<uchar>(i, j);
 				uchar bufferValue = pic->buf[i * raw_img.cols + j];
 				if (matrixValue != bufferValue) {
-					cout << "Mismatch at position (" << i << ", " << j << ")" << endl;
-					return;
+					ESP_LOGW(APP_TAG, "Value mismatch between pic buffer and opencv matrix at position %zu, %zu", i, j);
 				}
 			}
 		}
 
-		ESP_LOGI(DATA_TAG, "Highest point is (x=%zu, y=%zu)", 50, 100);
+		// run edge detection algorithm
+
+		// using opencv Canny function leads to issues with our specific build of open cv (on Windows 11)
+		// https://github.com/joachimBurket/esp32-opencv/issues/2
+		// we'd have to rebuild opencv for this to work
+		// or use docker
+		// or hope that it works on Mac OS
+		// int canny_y = run_canny(raw_img);
+		// ESP_LOGI(APP_TAG, "canny edges highest y=%zu", canny_y);
+
+		// this threshold algorithm is not functional, but it runs without raising errors 
+		// we're just using it temporarily for testing purposes
+		Point highestPoint = run_threshold(raw_img);
+
+		ESP_LOGI(DATA_TAG, "Highest point is (x=%zu, y=%zu)", highestPoint.x, highestPoint.y);
 		ESP_LOGV(DATA_TAG, "Picture End");
 
 		esp_camera_fb_return(pic);
