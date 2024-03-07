@@ -33,10 +33,25 @@ Next, plug your esp32 into your computer's and [check what USB port](https://doc
 ```
 idf.py -p <port> flash
 ```
-After the program is flashed to the devices, to see print statements and check the program's status, we can use the serial monitor.
+After the program is flashed to the devices, to see log and print statements and check the program's status, we can use the serial monitor. The (print-filter)[https://docs.espressif.com/projects/esp-idf/en/v4.4.3/esp32/api-guides/tools/idf-monitor.html#output-filtering] argument specifies the maximum level of log statements you wish to see. Be sure to use it so that the monitor is not flooded with verbose log statements.
 ```
-idf.py -p <port> monitor
+idf.py -p <port> monitor --print-filter="*:I"
 ```
+
+### Viewing Image Data
+Instead of setting up web streaming, we are using esp-idf's logging capabilities to transmit raw image data to our local machine over the serial wired connection. We are using log level verbose and the tag "DATA_TAG" to indicate that a log statement corresponds to image data. The python script viewer.py parses these logs and displays images. To get started, install the libraries required by the python script.
+```
+pip install -r requirements.txt
+```
+Next, after flashing the program to the esp32, run the following command to start the serial monitor, filter by verbose statements with DATA_TAG, and save the output to a file.
+```
+idf.py -p COM10 monitor --print-filter="image_data:V" > log.txt
+```
+Point the esp-32 camera at test images or objects, and wait a bit since writing images to a file byte by byte using log statements is slow. Next, stop the monitor and run the python script. Images will pop up one at a time, and you must close the image window to view the next one.
+```
+python viewer.py log.txt
+```
+If this method seems a bit hacky, that's because it is. The esp-idf framework for starting a webserver seemed more complicated than Arduino's, and this was faster to get up and running. Using python's pyserial library to directly read from the serial monitor (instead of using the file as an intermediary) would be faster, but we were unable to get pyserial to register any data.
 
 ## Acknowledgements
 - [esp-32 opencv library](https://github.com/joachimBurket/esp32-opencv)

@@ -64,6 +64,7 @@
 #include "esp_camera.h"
 
 using namespace std;
+using namespace cv;
 
 // ESP32Cam (AiThinker) PIN Map
 #ifdef BOARD_ESP32CAM_AITHINKER
@@ -88,8 +89,10 @@ using namespace std;
 
 #endif
 
-static const char *TAG = "example:take_picture";
+static const char *APP_TAG = "take_picture";
+static const char *DATA_TAG = "image_data";
 
+// https://github.com/espressif/esp32-camera/blob/master/driver/include/esp_camera.h
 static camera_config_t camera_config = {
     .pin_pwdn = CAM_PIN_PWDN,
     .pin_reset = CAM_PIN_RESET,
@@ -128,7 +131,7 @@ static esp_err_t init_camera(void)
     esp_err_t err = esp_camera_init(&camera_config);
     if (err != ESP_OK)
     {
-        ESP_LOGE(TAG, "Camera Init Failed");
+        ESP_LOGE(APP_TAG, "Camera Init Failed");
         return err;
     }
 
@@ -143,33 +146,45 @@ void app_main(void);
 
 void app_main(void)
 {
+	// https://docs.espressif.com/projects/esp-idf/en/v4.3/esp32/api-reference/system/log.html#_CPPv417esp_log_level_setPKc15esp_log_level_t
+	// set (max) log level for tags
+	// we're using log-level verbose for data and log level info for normal log statements
+	// then it should be pretty easy to filter between the two when running the monitor
+	esp_log_level_set(DATA_TAG, ESP_LOG_VERBOSE);
+	esp_log_level_set(APP_TAG, ESP_LOG_INFO);
 	if(ESP_OK != init_camera()) {
 		return;
 	}
 
 	while (1)
 	{
-		ESP_LOGI(TAG, "Taking picture...");
+		ESP_LOGI(APP_TAG, "Taking picture...");
 		camera_fb_t *pic = esp_camera_fb_get();
 
 		// use pic->buf to access the image
-		ESP_LOGI(TAG, "Picture taken! Its size was: %zu bytes", pic->len);
-		ESP_LOGI(TAG, "height: %zu ", pic->height);
-		ESP_LOGI(TAG, "width: %zu ", pic->width);
-		cout << "Buffer addr: " << static_cast<void*>(pic->buf) << endl;
+		ESP_LOGI(APP_TAG, "Picture taken! Its size was: %zu bytes", pic->len);
+		ESP_LOGI(APP_TAG, "height: %zu ", pic->height);
+		ESP_LOGI(APP_TAG, "width: %zu ", pic->width);
 
-		// Print first 32 bytes of raw pixel data (hexadecimal representation)
-		cout << "Pixel Data (Hexadecimal):" << endl;
-		for (size_t i = 0; i < 32; ++i) {
-			cout << hex << static_cast<int>(pic->buf[i]) << " ";
-				if ((i + 1) % 8 == 0) {
-					cout << endl;
-				}
+		// NOTE: if you change any log statements with DATA_TAG, viewer.py may have to be updated 
+		ESP_LOGV(DATA_TAG, "Picture Start");
+
+		// https://github.com/espressif/esp-idf/blob/v5.2.1/components/log/include/esp_log_internal.h
+		// write the image data to serial monitor
+		// buf len is uint16_t, so its max value is 2^16-1=65535. 
+		// we will use this as a chunk size to iteratively log the buffer
+		uint16_t max_buf_len = 65535;
+		ESP_LOGI(APP_TAG, "max: %zu ", max_buf_len);
+		size_t offset = 0; // offset = 0
+		while ((pic->len - offset) > max_buf_len) {
+			ESP_LOG_BUFFER_HEX_LEVEL(DATA_TAG, pic->buf + offset, max_buf_len, ESP_LOG_VERBOSE);
+			offset += max_buf_len;
 		}
+		ESP_LOG_BUFFER_HEX_LEVEL(DATA_TAG, pic->buf + offset, pic->len - offset, ESP_LOG_VERBOSE);
 
 		// for PIXFORMAT_GRAYSCALE, pic size = height*width, so each pixel is a byte
 		// presumably an 8-bit unsigned 1 channel opencv data type (8UC1) is fine
-		cv::Mat raw_img(pic->height, pic->width, CV_8UC1, pic->buf);
+		Mat raw_img(pic->height, pic->width, CV_8UC1, pic->buf);
 
 		// Iterate over matrix elements and compare with buffer
 		for (int i = 0; i < raw_img.rows; ++i) {
@@ -183,7 +198,10 @@ void app_main(void)
 				}
 			}
 		}
-		
+
+		ESP_LOGI(DATA_TAG, "Highest point is (x=%zu, y=%zu)", 50, 100);
+		ESP_LOGV(DATA_TAG, "Picture End");
+
 		esp_camera_fb_return(pic);
 
 		vTaskDelay(5000 / portTICK_RATE_MS);
